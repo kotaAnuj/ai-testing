@@ -1,335 +1,302 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Real-time Person Tracking and Steering</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            background-color: #f5f5f5;
-            padding: 20px;
-        }
-        h1 {
-            color: #333;
-        }
-        #container {
-            position: relative;
-            display: inline-block;
-        }
-        #videoElement {
-            display: block;
-            border: 2px solid #333;
-            border-radius: 8px;
-        }
-        #canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            pointer-events: none;
-        }
-        #controls {
-            margin-top: 20px;
-            font-size: 18px;
-        }
-        .command {
-            padding: 15px;
-            margin: 10px;
-            background-color: #fff;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            display: inline-block;
-            min-width: 200px;
-        }
-        #status {
-            padding: 10px;
-            margin: 10px;
-            background-color: #4CAF50;
-            color: white;
-            border-radius: 5px;
-            display: inline-block;
-        }
-        #status.loading {
-            background-color: #FF9800;
-        }
-        #status.error {
-            background-color: #f44336;
-        }
-        .label {
-            font-weight: bold;
-            color: #666;
-            font-size: 14px;
-        }
-        .value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #333;
-            margin-top: 5px;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>AI Car</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Arial;background:#1a1a2e;color:#fff;padding:10px}
+h1{text-align:center;font-size:1.3em;margin-bottom:10px}
+#status{text-align:center;padding:8px;background:#e63946;border-radius:5px;margin-bottom:10px;font-size:0.9em}
+#status.ok{background:#06d6a0}
+#vid{position:relative;max-width:640px;margin:0 auto 10px;background:#000;border-radius:8px;overflow:hidden}
+video{width:100%;display:block}
+canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+.modes{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.mode{padding:10px;background:#16213e;border:2px solid #0f3460;border-radius:5px;text-align:center;font-size:0.85em;font-weight:bold;cursor:pointer}
+.mode.active{background:#06d6a0;border-color:#06d6a0}
+.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px}
+.metric{background:#16213e;padding:10px;border-radius:5px;text-align:center}
+.metric-label{font-size:0.7em;opacity:0.7}
+.metric-val{font-size:1.4em;font-weight:bold;margin-top:3px}
+.stop-btn{width:100%;padding:15px;background:#e63946;border:none;border-radius:8px;color:#fff;font-size:1.1em;font-weight:bold;margin-bottom:10px}
+#log{background:#0f0f0f;padding:8px;border-radius:5px;height:120px;overflow-y:auto;font-size:0.7em;font-family:monospace}
+.ai-panel{background:#16213e;padding:10px;border-radius:5px;margin-bottom:10px}
+.ai-decision{background:#0f3460;padding:8px;border-radius:4px;margin-top:5px;font-size:0.85em}
+.api-input{width:100%;padding:8px;background:#0f3460;border:1px solid #06d6a0;border-radius:4px;color:#fff;font-size:0.85em;margin-top:5px}
+.api-btn{padding:8px 15px;background:#06d6a0;border:none;border-radius:4px;color:#000;font-weight:bold;font-size:0.85em;margin-top:5px;cursor:pointer}
+.api-status{font-size:0.8em;margin-top:5px;opacity:0.8}
+</style>
 </head>
 <body>
-    <h1>🎯 Real-time Person Tracking and Steering</h1>
-    <div id="status" class="loading">Loading model...</div>
+<h1>🤖 AI Person Tracking Car</h1>
+<div id="status">Loading...</div>
+<div id="vid">
+<video id="v" autoplay playsinline></video>
+<canvas id="c"></canvas>
+</div>
+<div class="modes">
+<div class="mode active" onclick="setMode('follow')">Follow</div>
+<div class="mode" onclick="setMode('avoid')">Avoid</div>
+<div class="mode" onclick="setMode('patrol')">Patrol</div>
+<div class="mode" onclick="setMode('manual')">Manual</div>
+</div>
+<div class="ai-panel">
+<div style="font-weight:bold;font-size:0.9em">🧠 Gemini AI Brain</div>
+<input type="text" id="apiKey" class="api-input" placeholder="Enter Gemini API Key (optional)" />
+<button class="api-btn" onclick="saveApiKey()">Enable AI</button>
+<div class="api-status" id="apiStatus">⚠️ AI disabled - No API key</div>
+<div class="ai-decision" id="aiDecision">Waiting for AI activation...</div>
+</div>
+<div class="metrics">
+<div class="metric"><div class="metric-label">Drive</div><div class="metric-val" id="drive">0</div></div>
+<div class="metric"><div class="metric-label">Steer</div><div class="metric-val" id="steer">0</div></div>
+<div class="metric"><div class="metric-label">Distance</div><div class="metric-val" id="dist">-</div></div>
+<div class="metric"><div class="metric-label">FPS</div><div class="metric-val" id="fps">0</div></div>
+</div>
+<button class="stop-btn" onclick="stop()">🛑 STOP</button>
+<div id="log"></div>
+
+<script>
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent';
+
+const v = document.getElementById('v');
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+let model, mode = 'follow', lastFrame = 0, frameCount = 0;
+let aiDecision = {mode: 'follow', reason: 'Starting up'};
+let lastAICall = 0;
+let GEMINI_KEY = localStorage.getItem('geminiKey') || '';
+
+// Load saved API key on startup
+if(GEMINI_KEY) {
+  document.getElementById('apiKey').value = GEMINI_KEY;
+  document.getElementById('apiStatus').innerHTML = '✅ AI enabled';
+  document.getElementById('aiDecision').textContent = 'AI ready - will analyze in 3 seconds';
+}
+
+function saveApiKey() {
+  const key = document.getElementById('apiKey').value.trim();
+  if(key.length > 20) {
+    GEMINI_KEY = key;
+    localStorage.setItem('geminiKey', key);
+    document.getElementById('apiStatus').innerHTML = '✅ API key saved! AI enabled';
+    log('✅ Gemini AI activated');
+  } else {
+    alert('Please enter a valid API key');
+  }
+}
+
+async function init() {
+  log('🚀 Starting...');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    v.srcObject = stream;
+    v.onloadedmetadata = () => {
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      updateStatus('📷 Camera ready', true);
+    };
+    model = await cocoSsd.load();
+    log('✅ AI loaded');
+    updateStatus('✅ Ready', true);
+    detect();
+  } catch(e) {
+    log('❌ Error: ' + e.message);
+    updateStatus('❌ Failed', false);
+  }
+}
+
+async function detect() {
+  if(!model) return requestAnimationFrame(detect);
+  
+  ctx.clearRect(0, 0, c.width, c.height);
+  const predictions = await model.detect(v);
+  const people = predictions.filter(p => p.class === 'person');
+  
+  const now = Date.now();
+  frameCount++;
+  if(now - lastFrame > 1000) {
+    document.getElementById('fps').textContent = frameCount;
+    frameCount = 0;
+    lastFrame = now;
+  }
+  
+  if(people.length > 0) {
+    const p = people.reduce((max, p) => p.score > max.score ? p : max);
+    await processPerson(p);
+  } else {
+    handleNoDetection();
+  }
+  
+  requestAnimationFrame(detect);
+}
+
+async function processPerson(person) {
+  const [x, y, w, h] = person.bbox;
+  const cx = x + w/2, cy = y + h/2;
+  const fcx = c.width/2, fcy = c.height/2;
+  const dx = cx - fcx, dy = cy - fcy;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  
+  drawBox(person.bbox, dist);
+  document.getElementById('dist').textContent = dist.toFixed(0);
+  
+  // Call Gemini AI every 3 seconds
+  const now = Date.now();
+  if(now - lastAICall > 3000) {
+    lastAICall = now;
+    callGeminiAI(person, dist, dx, dy);
+  }
+  
+  let drive = 0, steer = 0;
+  
+  // Use AI decision to modify behavior
+  const activeMode = aiDecision.mode || mode;
+  
+  if(activeMode === 'follow') {
+    steer = Math.round(Math.max(-100, Math.min(100, dx/3)));
+    if(dist > 150) drive = Math.round(Math.min(100, 50 + (dist-150)/5));
+    else if(dist < 100) drive = -30;
+  } else if(activeMode === 'avoid') {
+    if(dist < 200) {
+      steer = dx > 0 ? -80 : 80;
+      drive = -50;
+    }
+  } else if(activeMode === 'patrol') {
+    drive = 30;
+    steer = 0;
+  }
+  
+  sendCmd(drive, steer);
+}
+
+function handleNoDetection() {
+  document.getElementById('dist').textContent = '-';
+  if(mode === 'follow') sendCmd(0, 0);
+  else if(mode === 'patrol') sendCmd(30, 0);
+}
+
+async function callGeminiAI(person, dist, dx, dy) {
+  if(!GEMINI_KEY || GEMINI_KEY.length < 20) {
+    document.getElementById('aiDecision').textContent = 'AI disabled - Add API key to enable';
+    return;
+  }
+  
+  try {
+    const prompt = `You are controlling an AI robot car. Current situation:
+- Mode: ${mode}
+- Person detected: Yes
+- Distance: ${dist.toFixed(0)}px (optimal: 100-150px)
+- Position: ${dx > 0 ? 'Right' : 'Left'} of center (${Math.abs(dx).toFixed(0)}px)
+- Confidence: ${(person.score*100).toFixed(0)}%
+
+Based on this, decide:
+1. Should mode change? (follow/avoid/patrol/stop)
+2. Why?
+3. Any special instructions?
+
+Respond in JSON: {"mode":"follow","reason":"...", "instruction":"..."}`;
+
+    const resp = await fetch(GEMINI_URL + '?key=' + GEMINI_KEY, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        contents: [{parts: [{text: prompt}]}]
+      })
+    });
     
-    <div id="container">
-        <video id="videoElement" width="640" height="480" autoplay playsinline></video>
-        <canvas id="canvas" width="640" height="480"></canvas>
-    </div>
+    if(!resp.ok) {
+      throw new Error('API Error: ' + resp.status);
+    }
+    
+    const data = await resp.json();
+    const text = data.candidates[0].content.parts[0].text;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if(jsonMatch) {
+      aiDecision = JSON.parse(jsonMatch[0]);
+      document.getElementById('aiDecision').textContent = 
+        `Mode: ${aiDecision.mode} - ${aiDecision.reason}`;
+      log('🧠 AI: ' + aiDecision.reason);
+    }
+  } catch(e) {
+    console.error('Gemini error:', e);
+    document.getElementById('apiStatus').innerHTML = '⚠️ API Error - Check key';
+  }
+}
 
-    <div id="controls">
-        <div class="command">
-            <div class="label">STEERING</div>
-            <div id="steering" class="value">-</div>
-        </div>
-        <div class="command">
-            <div class="label">SPEED</div>
-            <div id="speed" class="value">0</div>
-        </div>
-        <div class="command">
-            <div class="label">DISTANCE</div>
-            <div id="distance" class="value">-</div>
-        </div>
-    </div>
+function drawBox(bbox, dist) {
+  const [x,y,w,h] = bbox;
+  ctx.strokeStyle = '#0f0';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, w, h);
+  
+  const cx = x + w/2, cy = y + h/2;
+  ctx.fillStyle = '#0f0';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 5, 0, 2*Math.PI);
+  ctx.fill();
+  
+  ctx.strokeStyle = '#f00';
+  ctx.lineWidth = 2;
+  const fcx = c.width/2, fcy = c.height/2;
+  ctx.beginPath();
+  ctx.moveTo(fcx-20, fcy);
+  ctx.lineTo(fcx+20, fcy);
+  ctx.moveTo(fcx, fcy-20);
+  ctx.lineTo(fcx, fcy+20);
+  ctx.stroke();
+  
+  ctx.strokeStyle = 'rgba(0,255,255,0.5)';
+  ctx.setLineDash([5,5]);
+  ctx.beginPath();
+  ctx.moveTo(fcx, fcy);
+  ctx.lineTo(cx, cy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
 
-    <div id="commandLog" style="margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto;">
-        <h3 style="color: #333;">📜 Command Log</h3>
-        <div id="logContainer" style="background-color: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 14px; text-align: left; height: 200px; overflow-y: auto;"></div>
-    </div>
+async function sendCmd(drive, steer) {
+  document.getElementById('drive').textContent = drive;
+  document.getElementById('steer').textContent = steer;
+  
+  try {
+    await fetch(`/control?drive=${drive}&steer=${steer}`);
+  } catch(e) {
+    console.error('Send error:', e);
+  }
+}
 
-    <script>
-        const video = document.getElementById('videoElement');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const steeringElement = document.getElementById('steering');
-        const speedElement = document.getElementById('speed');
-        const distanceElement = document.getElementById('distance');
-        const statusElement = document.getElementById('status');
-        
-        const frameCenterX = 320;
-        const frameCenterY = 240;
-        
-        let model = null;
-        let isVideoReady = false;
-        let animationId = null;
-        const logContainer = document.getElementById('logContainer');
-        let commandCount = 0;
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode').forEach(el => el.classList.remove('active'));
+  event.target.classList.add('active');
+  log('Mode: ' + m);
+}
 
-        function logCommand(command, speed, distance) {
-            commandCount++;
-            const timestamp = new Date().toLocaleTimeString();
-            const logEntry = document.createElement('div');
-            logEntry.style.marginBottom = '5px';
-            logEntry.innerHTML = `[${timestamp}] #${commandCount} → Command: <span style="color: #ffff00;">${command}</span> | Speed: <span style="color: #00ffff;">${speed}</span> | Distance: <span style="color: #ff69b4;">${distance}px</span>`;
-            logContainer.insertBefore(logEntry, logContainer.firstChild);
-            
-            // Keep only last 50 entries
-            while (logContainer.children.length > 50) {
-                logContainer.removeChild(logContainer.lastChild);
-            }
-        }
+function stop() {
+  sendCmd(0, 0);
+  fetch('/stop');
+  log('🛑 STOPPED');
+}
 
-        // Access webcam
-        async function setupCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { 
-                        width: 640, 
-                        height: 480 
-                    } 
-                });
-                video.srcObject = stream;
-                
-                // Wait for video to be ready
-                return new Promise((resolve) => {
-                    video.onloadedmetadata = () => {
-                        video.play();
-                        isVideoReady = true;
-                        resolve();
-                    };
-                });
-            } catch (err) {
-                console.error("Error accessing webcam: ", err);
-                statusElement.textContent = "Error: Cannot access camera";
-                statusElement.className = "error";
-                throw err;
-            }
-        }
+function log(msg) {
+  const d = document.getElementById('log');
+  const t = new Date().toLocaleTimeString();
+  d.innerHTML = `<div>[${t}] ${msg}</div>` + d.innerHTML;
+  if(d.children.length > 50) d.removeChild(d.lastChild);
+}
 
-        async function loadModel() {
-            try {
-                statusElement.textContent = "Loading AI model...";
-                statusElement.className = "loading";
-                model = await cocoSsd.load();
-                statusElement.textContent = "✓ Ready - Tracking Active";
-                statusElement.className = "";
-            } catch (err) {
-                console.error("Error loading model: ", err);
-                statusElement.textContent = "Error loading model";
-                statusElement.className = "error";
-                throw err;
-            }
-        }
+function updateStatus(msg, ok) {
+  const s = document.getElementById('status');
+  s.textContent = msg;
+  s.className = ok ? 'ok' : '';
+}
 
-        function drawBoundingBox(bbox, label, confidence) {
-            const [x, y, width, height] = bbox;
-            
-            // Draw bounding box
-            ctx.strokeStyle = '#00FF00';
-            ctx.lineWidth = 3;
-            ctx.strokeRect(x, y, width, height);
-            
-            // Draw center point
-            const centerX = x + width / 2;
-            const centerY = y + height / 2;
-            ctx.fillStyle = '#00FF00';
-            ctx.beginPath();
-            ctx.arc(centerX, centerY, 5, 0, 2 * Math.PI);
-            ctx.fill();
-            
-            // Draw center crosshair
-            ctx.strokeStyle = '#FF0000';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(frameCenterX - 20, frameCenterY);
-            ctx.lineTo(frameCenterX + 20, frameCenterY);
-            ctx.moveTo(frameCenterX, frameCenterY - 20);
-            ctx.lineTo(frameCenterX, frameCenterY + 20);
-            ctx.stroke();
-            
-            // Draw label
-            ctx.fillStyle = '#00FF00';
-            ctx.font = 'bold 16px Arial';
-            ctx.fillText(`${label} (${(confidence * 100).toFixed(0)}%)`, x, y - 5);
-        }
-
-        async function detectObjects() {
-            if (!isVideoReady || !model) {
-                animationId = requestAnimationFrame(detectObjects);
-                return;
-            }
-
-            // Clear canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            try {
-                // Detect objects
-                const predictions = await model.detect(video);
-                
-                // Find person with highest confidence
-                const people = predictions.filter(pred => pred.class === 'person');
-                
-                if (people.length > 0) {
-                    // Get person with highest confidence
-                    const person = people.reduce((max, p) => 
-                        p.score > max.score ? p : max
-                    );
-                    
-                    const [x, y, width, height] = person.bbox;
-                    
-                    // Draw bounding box
-                    drawBoundingBox(person.bbox, person.class, person.score);
-                    
-                    // Calculate center
-                    const centerX = x + width / 2;
-                    const centerY = y + height / 2;
-                    
-                    // Handle steering
-                    handleSteering(centerX, centerY, width, height);
-                } else {
-                    // No person detected
-                    steeringElement.textContent = "No Person";
-                    speedElement.textContent = "0";
-                    distanceElement.textContent = "-";
-                    logCommand("NO PERSON DETECTED", "0", "N/A");
-                }
-            } catch (err) {
-                console.error("Detection error: ", err);
-            }
-
-            animationId = requestAnimationFrame(detectObjects);
-        }
-
-        function handleSteering(centerX, centerY, width, height) {
-            const deltaX = centerX - frameCenterX;
-            const deltaY = centerY - frameCenterY;
-            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-            
-            // Estimate relative size (person closer = bigger bounding box)
-            const personSize = (width * height) / (640 * 480) * 100;
-            
-            // Display distance
-            distanceElement.textContent = distance.toFixed(0) + "px";
-            
-            let steeringCommand = "";
-            let speed = 0;
-            
-            // Calculate speed based on distance from center
-            if (distance > 30) {
-                speed = Math.min(100, Math.max(20, 100 - distance / 5));
-                speedElement.textContent = speed.toFixed(0);
-                
-                // Horizontal steering
-                if (Math.abs(deltaX) > 30) {
-                    if (deltaX > 30) {
-                        steeringCommand = "RIGHT ➡️";
-                    } else {
-                        steeringCommand = "LEFT ⬅️";
-                    }
-                } else {
-                    steeringCommand = "STRAIGHT ⬆️";
-                }
-                
-                // Vertical adjustment
-                if (deltaY > 50) {
-                    steeringCommand += " + BACK";
-                } else if (deltaY < -50) {
-                    steeringCommand += " + FWD";
-                }
-                
-                steeringElement.textContent = steeringCommand;
-                
-                // Log the command
-                logCommand(steeringCommand, speed.toFixed(0), distance.toFixed(0));
-                
-                // Here you would send commands to your robot
-                // Example: sendToRobot(steeringCommand, speed);
-                
-            } else {
-                // Person is centered
-                steeringCommand = "CENTERED ✓";
-                speed = 0;
-                steeringElement.textContent = steeringCommand;
-                speedElement.textContent = "0";
-            }
-        }
-
-        // Initialize everything
-        async function init() {
-            try {
-                await setupCamera();
-                await loadModel();
-                detectObjects();
-            } catch (err) {
-                console.error("Initialization error: ", err);
-            }
-        }
-
-        // Start when page loads
-        init();
-
-        // Cleanup on page unload
-        window.addEventListener('beforeunload', () => {
-            if (animationId) {
-                cancelAnimationFrame(animationId);
-            }
-            if (video.srcObject) {
-                video.srcObject.getTracks().forEach(track => track.stop());
-            }
-        });
-    </script>
+init();
+</script>
 </body>
 </html>
