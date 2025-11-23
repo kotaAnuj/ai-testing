@@ -10,123 +10,325 @@
         body {
             font-family: Arial, sans-serif;
             text-align: center;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        #container {
+            position: relative;
+            display: inline-block;
         }
         #videoElement {
-            width: 640px;
-            height: 480px;
-            border: 1px solid #ccc;
+            display: block;
+            border: 2px solid #333;
+            border-radius: 8px;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
         }
         #controls {
             margin-top: 20px;
             font-size: 18px;
         }
         .command {
+            padding: 15px;
+            margin: 10px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: inline-block;
+            min-width: 200px;
+        }
+        #status {
             padding: 10px;
-            margin: 5px;
-            background-color: #eee;
+            margin: 10px;
+            background-color: #4CAF50;
+            color: white;
             border-radius: 5px;
+            display: inline-block;
+        }
+        #status.loading {
+            background-color: #FF9800;
+        }
+        #status.error {
+            background-color: #f44336;
+        }
+        .label {
+            font-weight: bold;
+            color: #666;
+            font-size: 14px;
+        }
+        .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            margin-top: 5px;
         }
     </style>
 </head>
 <body>
-    <h1>Real-time Person Tracking and Steering</h1>
-    <video id="videoElement" width="640" height="480" autoplay></video>
+    <h1>🎯 Real-time Person Tracking and Steering</h1>
+    <div id="status" class="loading">Loading model...</div>
+    
+    <div id="container">
+        <video id="videoElement" width="640" height="480" autoplay playsinline></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+    </div>
 
     <div id="controls">
-        <h2>Control Commands:</h2>
-        <div id="steering" class="command">Steering: None</div>
-        <div id="speed" class="command">Speed: 100</div>
+        <div class="command">
+            <div class="label">STEERING</div>
+            <div id="steering" class="value">-</div>
+        </div>
+        <div class="command">
+            <div class="label">SPEED</div>
+            <div id="speed" class="value">0</div>
+        </div>
+        <div class="command">
+            <div class="label">DISTANCE</div>
+            <div id="distance" class="value">-</div>
+        </div>
+    </div>
+
+    <div id="commandLog" style="margin-top: 30px; max-width: 800px; margin-left: auto; margin-right: auto;">
+        <h3 style="color: #333;">📜 Command Log</h3>
+        <div id="logContainer" style="background-color: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 14px; text-align: left; height: 200px; overflow-y: auto;"></div>
     </div>
 
     <script>
         const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
         const steeringElement = document.getElementById('steering');
         const speedElement = document.getElementById('speed');
-        const frameCenterX = 320; // Horizontal center of the frame (640px)
-        const frameCenterY = 240; // Vertical center of the frame (480px)
+        const distanceElement = document.getElementById('distance');
+        const statusElement = document.getElementById('status');
         
-        // Access webcam video
-        navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
-            video.srcObject = stream;
-        }).catch((err) => {
-            console.error("Error accessing webcam: ", err);
-        });
+        const frameCenterX = 320;
+        const frameCenterY = 240;
+        
+        let model = null;
+        let isVideoReady = false;
+        let animationId = null;
+        const logContainer = document.getElementById('logContainer');
+        let commandCount = 0;
+
+        function logCommand(command, speed, distance) {
+            commandCount++;
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.style.marginBottom = '5px';
+            logEntry.innerHTML = `[${timestamp}] #${commandCount} → Command: <span style="color: #ffff00;">${command}</span> | Speed: <span style="color: #00ffff;">${speed}</span> | Distance: <span style="color: #ff69b4;">${distance}px</span>`;
+            logContainer.insertBefore(logEntry, logContainer.firstChild);
+            
+            // Keep only last 50 entries
+            while (logContainer.children.length > 50) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+
+        // Access webcam
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: 640, 
+                        height: 480 
+                    } 
+                });
+                video.srcObject = stream;
+                
+                // Wait for video to be ready
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        isVideoReady = true;
+                        resolve();
+                    };
+                });
+            } catch (err) {
+                console.error("Error accessing webcam: ", err);
+                statusElement.textContent = "Error: Cannot access camera";
+                statusElement.className = "error";
+                throw err;
+            }
+        }
 
         async function loadModel() {
-            return await cocoSsd.load();  // Load COCO-SSD object detection model
+            try {
+                statusElement.textContent = "Loading AI model...";
+                statusElement.className = "loading";
+                model = await cocoSsd.load();
+                statusElement.textContent = "✓ Ready - Tracking Active";
+                statusElement.className = "";
+            } catch (err) {
+                console.error("Error loading model: ", err);
+                statusElement.textContent = "Error loading model";
+                statusElement.className = "error";
+                throw err;
+            }
         }
 
-        async function detectObjects(model) {
-            const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            // Detect objects in the current frame
-            const predictions = await model.detect(canvas);
+        function drawBoundingBox(bbox, label, confidence) {
+            const [x, y, width, height] = bbox;
             
-            // Filter predictions to find the person (COCO class "person" = 1)
-            const person = predictions.find(pred => pred.class === 'person');
-            if (person) {
-                const { left, top, width, height } = person.bbox;
-
-                // Calculate the center of the bounding box
-                const centerX = left + width / 2;
-                const centerY = top + height / 2;
-
-                // Handle steering and speed based on the person's position
-                handleSteering(centerX, centerY);
-            }
-
-            requestAnimationFrame(() => detectObjects(model));  // Keep detecting in real time
+            // Draw bounding box
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, width, height);
+            
+            // Draw center point
+            const centerX = x + width / 2;
+            const centerY = y + height / 2;
+            ctx.fillStyle = '#00FF00';
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 5, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Draw center crosshair
+            ctx.strokeStyle = '#FF0000';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(frameCenterX - 20, frameCenterY);
+            ctx.lineTo(frameCenterX + 20, frameCenterY);
+            ctx.moveTo(frameCenterX, frameCenterY - 20);
+            ctx.lineTo(frameCenterX, frameCenterY + 20);
+            ctx.stroke();
+            
+            // Draw label
+            ctx.fillStyle = '#00FF00';
+            ctx.font = 'bold 16px Arial';
+            ctx.fillText(`${label} (${(confidence * 100).toFixed(0)}%)`, x, y - 5);
         }
 
-        function handleSteering(centerX, centerY) {
-            // Calculate the relative position of the person to the center of the frame
-            const deltaX = centerX - frameCenterX;  // Positive if person is to the right, negative if left
-            const deltaY = centerY - frameCenterY;  // Positive if person is below center, negative if above
+        async function detectObjects() {
+            if (!isVideoReady || !model) {
+                animationId = requestAnimationFrame(detectObjects);
+                return;
+            }
 
-            // Hypotenuse formula to estimate the distance of the person from the center
-            const distance = Math.sqrt(Math.pow(deltaX, 2) + Math.pow(deltaY, 2));
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Adjust steering and speed based on distance and position
-            if (distance > 50) {
-                let steeringCommand = "None";
-                let speed = Math.min(100, Math.max(20, 100 - distance / 10));  // Scale speed
+            try {
+                // Detect objects
+                const predictions = await model.detect(video);
                 
-                // Update speed display
-                speedElement.textContent = `Speed: ${speed.toFixed(0)}`;
-
-                // Determine steering direction based on deltaX (left/right)
-                if (deltaX > 50) {
-                    steeringCommand = "Turn Right";
-                    steeringElement.textContent = `Steering: ${steeringCommand}`;
-                    // You can replace the log with WebSocket or Bluetooth commands to steer the robot
-                } else if (deltaX < -50) {
-                    steeringCommand = "Turn Left";
-                    steeringElement.textContent = `Steering: ${steeringCommand}`;
-                    // Send the "Turn Left" command
+                // Find person with highest confidence
+                const people = predictions.filter(pred => pred.class === 'person');
+                
+                if (people.length > 0) {
+                    // Get person with highest confidence
+                    const person = people.reduce((max, p) => 
+                        p.score > max.score ? p : max
+                    );
+                    
+                    const [x, y, width, height] = person.bbox;
+                    
+                    // Draw bounding box
+                    drawBoundingBox(person.bbox, person.class, person.score);
+                    
+                    // Calculate center
+                    const centerX = x + width / 2;
+                    const centerY = y + height / 2;
+                    
+                    // Handle steering
+                    handleSteering(centerX, centerY, width, height);
                 } else {
-                    steeringCommand = "Straight";
-                    steeringElement.textContent = `Steering: ${steeringCommand}`;
-                    // Keep moving straight if person is near the center
+                    // No person detected
+                    steeringElement.textContent = "No Person";
+                    speedElement.textContent = "0";
+                    distanceElement.textContent = "-";
+                    logCommand("NO PERSON DETECTED", "0", "N/A");
+                }
+            } catch (err) {
+                console.error("Detection error: ", err);
+            }
+
+            animationId = requestAnimationFrame(detectObjects);
+        }
+
+        function handleSteering(centerX, centerY, width, height) {
+            const deltaX = centerX - frameCenterX;
+            const deltaY = centerY - frameCenterY;
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+            
+            // Estimate relative size (person closer = bigger bounding box)
+            const personSize = (width * height) / (640 * 480) * 100;
+            
+            // Display distance
+            distanceElement.textContent = distance.toFixed(0) + "px";
+            
+            let steeringCommand = "";
+            let speed = 0;
+            
+            // Calculate speed based on distance from center
+            if (distance > 30) {
+                speed = Math.min(100, Math.max(20, 100 - distance / 5));
+                speedElement.textContent = speed.toFixed(0);
+                
+                // Horizontal steering
+                if (Math.abs(deltaX) > 30) {
+                    if (deltaX > 30) {
+                        steeringCommand = "RIGHT ➡️";
+                    } else {
+                        steeringCommand = "LEFT ⬅️";
+                    }
+                } else {
+                    steeringCommand = "STRAIGHT ⬆️";
                 }
                 
-                // Move forward/backward based on deltaY (up/down)
+                // Vertical adjustment
                 if (deltaY > 50) {
-                    steeringElement.textContent += `, Move Backward`;
-                    // Send the "Move Backward" command
+                    steeringCommand += " + BACK";
                 } else if (deltaY < -50) {
-                    steeringElement.textContent += `, Move Forward`;
-                    // Send the "Move Forward" command
+                    steeringCommand += " + FWD";
                 }
+                
+                steeringElement.textContent = steeringCommand;
+                
+                // Log the command
+                logCommand(steeringCommand, speed.toFixed(0), distance.toFixed(0));
+                
+                // Here you would send commands to your robot
+                // Example: sendToRobot(steeringCommand, speed);
+                
+            } else {
+                // Person is centered
+                steeringCommand = "CENTERED ✓";
+                speed = 0;
+                steeringElement.textContent = steeringCommand;
+                speedElement.textContent = "0";
             }
         }
 
-        // Load the model and start detecting
-        loadModel().then((model) => {
-            detectObjects(model);
+        // Initialize everything
+        async function init() {
+            try {
+                await setupCamera();
+                await loadModel();
+                detectObjects();
+            } catch (err) {
+                console.error("Initialization error: ", err);
+            }
+        }
+
+        // Start when page loads
+        init();
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
         });
     </script>
 </body>
