@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Person Tracking and Steering</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+        #videoElement {
+            width: 640px;
+            height: 480px;
+            border: 1px solid #ccc;
+        }
+        #controls {
+            margin-top: 20px;
+            font-size: 18px;
+        }
+        .command {
+            padding: 10px;
+            margin: 5px;
+            background-color: #eee;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-time Person Tracking and Steering</h1>
+    <video id="videoElement" width="640" height="480" autoplay></video>
+
+    <div id="controls">
+        <h2>Control Commands:</h2>
+        <div id="steering" class="command">Steering: None</div>
+        <div id="speed" class="command">Speed: 100</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('videoElement');
+        const steeringElement = document.getElementById('steering');
+        const speedElement = document.getElementById('speed');
+        const frameCenterX = 320; // Horizontal center of the frame (640px)
+        const frameCenterY = 240; // Vertical center of the frame (480px)
+        
+        // Access webcam video
+        navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+            video.srcObject = stream;
+        }).catch((err) => {
+            console.error("Error accessing webcam: ", err);
+        });
+
+        async function loadModel() {
+            return await cocoSsd.load();  // Load COCO-SSD object detection model
+        }
+
+        async function detectObjects(model) {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Detect objects in the current frame
+            const predictions = await model.detect(canvas);
+            
+            // Filter predictions to find the person (COCO class "person" = 1)
+            const person = predictions.find(pred => pred.class === 'person');
+            if (person) {
+                const { left, top, width, height } = person.bbox;
+
+                // Calculate the center of the bounding box
+                const centerX = left + width / 2;
+                const centerY = top + height / 2;
+
+                // Handle steering and speed based on the person's position
+                handleSteering(centerX, centerY);
+            }
+
+            requestAnimationFrame(() => detectObjects(model));  // Keep detecting in real time
+        }
+
+        function handleSteering(centerX, centerY) {
+            // Calculate the relative position of the person to the center of the frame
+            const deltaX = centerX - frameCenterX;  // Positive if person is to the right, negative if left
+            const deltaY = centerY - frameCenterY;  // Positive if person is below center, negative if above
+
+            // Hypotenuse formula to estimate the distance of the person from the center
+            const distance = Math.sqrt(Math.pow(deltaX, 2) + Math.pow(deltaY, 2));
+
+            // Adjust steering and speed based on distance and position
+            if (distance > 50) {
+                let steeringCommand = "None";
+                let speed = Math.min(100, Math.max(20, 100 - distance / 10));  // Scale speed
+                
+                // Update speed display
+                speedElement.textContent = `Speed: ${speed.toFixed(0)}`;
+
+                // Determine steering direction based on deltaX (left/right)
+                if (deltaX > 50) {
+                    steeringCommand = "Turn Right";
+                    steeringElement.textContent = `Steering: ${steeringCommand}`;
+                    // You can replace the log with WebSocket or Bluetooth commands to steer the robot
+                } else if (deltaX < -50) {
+                    steeringCommand = "Turn Left";
+                    steeringElement.textContent = `Steering: ${steeringCommand}`;
+                    // Send the "Turn Left" command
+                } else {
+                    steeringCommand = "Straight";
+                    steeringElement.textContent = `Steering: ${steeringCommand}`;
+                    // Keep moving straight if person is near the center
+                }
+                
+                // Move forward/backward based on deltaY (up/down)
+                if (deltaY > 50) {
+                    steeringElement.textContent += `, Move Backward`;
+                    // Send the "Move Backward" command
+                } else if (deltaY < -50) {
+                    steeringElement.textContent += `, Move Forward`;
+                    // Send the "Move Forward" command
+                }
+            }
+        }
+
+        // Load the model and start detecting
+        loadModel().then((model) => {
+            detectObjects(model);
+        });
+    </script>
+</body>
+</html>
