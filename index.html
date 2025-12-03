@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>AI Car Control</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Arial;background:#1a1a2e;color:#fff;padding:10px}
+h1{text-align:center;font-size:1.3em;margin-bottom:10px}
+#status{text-align:center;padding:8px;background:#e63946;border-radius:5px;margin-bottom:10px;font-size:0.9em}
+#status.ok{background:#06d6a0}
+#status.warn{background:#f77f00}
+.connection-panel{background:#16213e;padding:12px;border-radius:8px;margin-bottom:10px;border:2px solid #0f3460}
+.connection-panel.connected{border-color:#06d6a0}
+.ip-input{width:60%;padding:10px;background:#0f3460;border:1px solid #06d6a0;border-radius:5px;color:#fff;font-size:1em;margin-right:5px}
+.connect-btn{padding:10px 20px;background:#06d6a0;border:none;border-radius:5px;color:#000;font-weight:bold;font-size:1em;cursor:pointer}
+.connect-btn:hover{background:#05b587}
+.connect-btn.disconnect{background:#e63946}
+.connect-status{margin-top:8px;font-size:0.85em;opacity:0.9}
+#vid{position:relative;max-width:640px;margin:0 auto 10px;background:#000;border-radius:8px;overflow:hidden}
+video{width:100%;display:block}
+canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+.modes{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.mode{padding:10px;background:#16213e;border:2px solid #0f3460;border-radius:5px;text-align:center;font-size:0.85em;font-weight:bold;cursor:pointer}
+.mode.active{background:#06d6a0;border-color:#06d6a0;color:#000}
+.mode:hover{border-color:#06d6a0}
+.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px}
+.metric{background:#16213e;padding:10px;border-radius:5px;text-align:center}
+.metric-label{font-size:0.7em;opacity:0.7}
+.metric-val{font-size:1.4em;font-weight:bold;margin-top:3px}
+.stop-btn{width:100%;padding:15px;background:#e63946;border:none;border-radius:8px;color:#fff;font-size:1.1em;font-weight:bold;margin-bottom:10px;cursor:pointer}
+.stop-btn:hover{background:#d62828}
+#log{background:#0f0f0f;padding:8px;border-radius:5px;height:120px;overflow-y:auto;font-size:0.7em;font-family:monospace}
+.ai-panel{background:#16213e;padding:10px;border-radius:5px;margin-bottom:10px}
+.ai-decision{background:#0f3460;padding:8px;border-radius:4px;margin-top:5px;font-size:0.85em}
+.api-input{width:100%;padding:8px;background:#0f3460;border:1px solid #06d6a0;border-radius:4px;color:#fff;font-size:0.85em;margin-top:5px}
+.api-btn{padding:8px 15px;background:#06d6a0;border:none;border-radius:4px;color:#000;font-weight:bold;font-size:0.85em;margin-top:5px;cursor:pointer}
+.api-btn:hover{background:#05b587}
+.api-status{font-size:0.8em;margin-top:5px;opacity:0.8}
+.error{color:#e63946;font-weight:bold}
+.success{color:#06d6a0;font-weight:bold}
+</style>
+</head>
+<body>
+<h1>🤖 AI Person Tracking Car</h1>
+<div id="status">Loading...</div>
+
+<div class="connection-panel" id="connPanel">
+  <div style="font-weight:bold;margin-bottom:8px">🔌 ESP32 Connection</div>
+  <input type="text" id="espIP" class="ip-input" placeholder="Enter ESP32 IP (e.g. 192.168.1.100)" />
+  <button class="connect-btn" onclick="toggleConnection()">Connect</button>
+  <div class="connect-status" id="connStatus">⚠️ Not connected - Enter ESP32 IP address</div>
+</div>
+
+<div id="vid">
+<video id="v" autoplay playsinline></video>
+<canvas id="c"></canvas>
+</div>
+
+<div class="modes">
+<div class="mode active" onclick="setMode('follow')">Follow</div>
+<div class="mode" onclick="setMode('avoid')">Avoid</div>
+<div class="mode" onclick="setMode('patrol')">Patrol</div>
+<div class="mode" onclick="setMode('manual')">Manual</div>
+</div>
+
+<div class="ai-panel">
+<div style="font-weight:bold;font-size:0.9em">🧠 Gemini AI Brain (Optional)</div>
+<input type="text" id="apiKey" class="api-input" placeholder="Enter Gemini API Key (optional)" />
+<button class="api-btn" onclick="saveApiKey()">Enable AI</button>
+<div class="api-status" id="apiStatus">⚠️ AI disabled - No API key</div>
+<div class="ai-decision" id="aiDecision">AI ready when enabled</div>
+</div>
+
+<div class="metrics">
+<div class="metric"><div class="metric-label">Drive</div><div class="metric-val" id="drive">0</div></div>
+<div class="metric"><div class="metric-label">Steer</div><div class="metric-val" id="steer">0</div></div>
+<div class="metric"><div class="metric-label">Distance</div><div class="metric-val" id="dist">-</div></div>
+<div class="metric"><div class="metric-label">FPS</div><div class="metric-val" id="fps">0</div></div>
+</div>
+
+<button class="stop-btn" onclick="emergencyStop()">🛑 EMERGENCY STOP</button>
+<div id="log"></div>
+
+<script>
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent';
+
+const v = document.getElementById('v');
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+let model, mode = 'follow', lastFrame = 0, frameCount = 0;
+let aiDecision = {mode: 'follow', reason: 'Starting up'};
+let lastAICall = 0;
+let GEMINI_KEY = localStorage.getItem('geminiKey') || '';
+let ESP_IP = localStorage.getItem('espIP') || '';
+let isConnected = false;
+let connectionCheckInterval = null;
+
+// Load saved settings
+if(GEMINI_KEY) {
+  document.getElementById('apiKey').value = GEMINI_KEY;
+  document.getElementById('apiStatus').innerHTML = '✅ AI enabled';
+}
+if(ESP_IP) {
+  document.getElementById('espIP').value = ESP_IP;
+}
+
+function saveApiKey() {
+  const key = document.getElementById('apiKey').value.trim();
+  if(key.length > 20) {
+    GEMINI_KEY = key;
+    localStorage.setItem('geminiKey', key);
+    document.getElementById('apiStatus').innerHTML = '✅ API key saved! AI enabled';
+    log('✅ Gemini AI activated');
+  } else {
+    alert('Please enter a valid API key');
+  }
+}
+
+async function toggleConnection() {
+  if(isConnected) {
+    disconnect();
+  } else {
+    await connect();
+  }
+}
+
+async function connect() {
+  const ip = document.getElementById('espIP').value.trim();
+  if(!ip) {
+    alert('Please enter ESP32 IP address');
+    return;
+  }
+  
+  ESP_IP = ip;
+  localStorage.setItem('espIP', ip);
+  
+  document.getElementById('connStatus').innerHTML = '🔄 Connecting to ' + ip + '...';
+  log('🔄 Connecting to ESP32 at ' + ip);
+  
+  try {
+    const resp = await fetch(`http://${ESP_IP}/status`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000)
+    });
+    
+    if(resp.ok) {
+      const data = await resp.json();
+      isConnected = true;
+      document.getElementById('connPanel').classList.add('connected');
+      document.getElementById('connStatus').innerHTML = `<span class="success">✅ Connected to ${ESP_IP}</span><br>Drive: ${data.drive} | Steer: ${data.steer} | Distance: ${data.distance}cm`;
+      document.querySelector('.connect-btn').textContent = 'Disconnect';
+      document.querySelector('.connect-btn').classList.add('disconnect');
+      log('✅ ESP32 connected successfully');
+      updateStatus('✅ ESP32 Connected', true);
+      
+      // Start connection monitoring
+      connectionCheckInterval = setInterval(checkConnection, 3000);
+    } else {
+      throw new Error('ESP32 not responding');
+    }
+  } catch(e) {
+    log('❌ Connection failed: ' + e.message);
+    document.getElementById('connStatus').innerHTML = '<span class="error">❌ Connection failed - Check IP and WiFi</span>';
+    updateStatus('❌ ESP32 Connection Failed', false);
+  }
+}
+
+function disconnect() {
+  isConnected = false;
+  if(connectionCheckInterval) clearInterval(connectionCheckInterval);
+  document.getElementById('connPanel').classList.remove('connected');
+  document.getElementById('connStatus').innerHTML = '⚠️ Disconnected';
+  document.querySelector('.connect-btn').textContent = 'Connect';
+  document.querySelector('.connect-btn').classList.remove('disconnect');
+  log('🔌 Disconnected from ESP32');
+  sendCmd(0, 0); // Stop motors
+}
+
+async function checkConnection() {
+  if(!isConnected) return;
+  
+  try {
+    const resp = await fetch(`http://${ESP_IP}/data`, {
+      signal: AbortSignal.timeout(2000)
+    });
+    
+    if(resp.ok) {
+      const data = await resp.json();
+      // Connection alive, update status occasionally
+      if(Math.random() < 0.1) { // Update 10% of the time to avoid spam
+        document.getElementById('connStatus').innerHTML = `<span class="success">✅ Connected | Distance: ${data.distance.toFixed(1)}cm</span>`;
+      }
+    } else {
+      throw new Error('Lost connection');
+    }
+  } catch(e) {
+    log('⚠️ Connection lost');
+    disconnect();
+  }
+}
+
+async function init() {
+  log('🚀 Starting AI vision system...');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    v.srcObject = stream;
+    v.onloadedmetadata = () => {
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      updateStatus('📷 Camera ready', true);
+    };
+    model = await cocoSsd.load();
+    log('✅ AI vision loaded');
+    updateStatus('✅ Vision Ready - Connect ESP32', true);
+    detect();
+  } catch(e) {
+    log('❌ Error: ' + e.message);
+    updateStatus('❌ Failed', false);
+  }
+}
+
+async function detect() {
+  if(!model) return requestAnimationFrame(detect);
+  
+  ctx.clearRect(0, 0, c.width, c.height);
+  const predictions = await model.detect(v);
+  const people = predictions.filter(p => p.class === 'person');
+  
+  const now = Date.now();
+  frameCount++;
+  if(now - lastFrame > 1000) {
+    document.getElementById('fps').textContent = frameCount;
+    frameCount = 0;
+    lastFrame = now;
+  }
+  
+  if(people.length > 0) {
+    const p = people.reduce((max, p) => p.score > max.score ? p : max);
+    await processPerson(p);
+  } else {
+    handleNoDetection();
+  }
+  
+  requestAnimationFrame(detect);
+}
+
+async function processPerson(person) {
+  const [x, y, w, h] = person.bbox;
+  const cx = x + w/2, cy = y + h/2;
+  const fcx = c.width/2, fcy = c.height/2;
+  const dx = cx - fcx, dy = cy - fcy;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  
+  drawBox(person.bbox, dist);
+  document.getElementById('dist').textContent = dist.toFixed(0);
+  
+  // Call Gemini AI every 3 seconds if enabled
+  const now = Date.now();
+  if(GEMINI_KEY && now - lastAICall > 3000) {
+    lastAICall = now;
+    callGeminiAI(person, dist, dx, dy);
+  }
+  
+  let drive = 0, steer = 0;
+  
+  // Use AI decision to modify behavior if AI is enabled
+  const activeMode = (GEMINI_KEY && aiDecision.mode) ? aiDecision.mode : mode;
+  
+  if(activeMode === 'follow') {
+    steer = Math.round(Math.max(-100, Math.min(100, dx/3)));
+    if(dist > 150) drive = Math.round(Math.min(100, 50 + (dist-150)/5));
+    else if(dist < 100) drive = -30;
+  } else if(activeMode === 'avoid') {
+    if(dist < 200) {
+      steer = dx > 0 ? -80 : 80;
+      drive = -50;
+    }
+  } else if(activeMode === 'patrol') {
+    drive = 30;
+    steer = 0;
+  }
+  
+  sendCmd(drive, steer);
+}
+
+function handleNoDetection() {
+  document.getElementById('dist').textContent = '-';
+  if(mode === 'follow') sendCmd(0, 0);
+  else if(mode === 'patrol') sendCmd(30, 0);
+}
+
+async function callGeminiAI(person, dist, dx, dy) {
+  if(!GEMINI_KEY || GEMINI_KEY.length < 20) return;
+  
+  try {
+    const prompt = `You are controlling an AI robot car. Current situation:
+- Mode: ${mode}
+- Person detected: Yes
+- Distance: ${dist.toFixed(0)}px (optimal: 100-150px)
+- Position: ${dx > 0 ? 'Right' : 'Left'} of center (${Math.abs(dx).toFixed(0)}px)
+- Confidence: ${(person.score*100).toFixed(0)}%
+
+Based on this, decide:
+1. Should mode change? (follow/avoid/patrol/manual)
+2. Why?
+3. Any special instructions?
+
+Respond in JSON: {"mode":"follow","reason":"...","instruction":"..."}`;
+
+    const resp = await fetch(GEMINI_URL + '?key=' + GEMINI_KEY, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        contents: [{parts: [{text: prompt}]}]
+      })
+    });
+    
+    if(!resp.ok) throw new Error('API Error: ' + resp.status);
+    
+    const data = await resp.json();
+    const text = data.candidates[0].content.parts[0].text;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if(jsonMatch) {
+      aiDecision = JSON.parse(jsonMatch[0]);
+      document.getElementById('aiDecision').textContent = 
+        `🧠 Mode: ${aiDecision.mode} - ${aiDecision.reason}`;
+      log('🧠 AI: ' + aiDecision.reason);
+    }
+  } catch(e) {
+    console.error('Gemini error:', e);
+    document.getElementById('apiStatus').innerHTML = '⚠️ API Error - Check key';
+  }
+}
+
+function drawBox(bbox, dist) {
+  const [x,y,w,h] = bbox;
+  ctx.strokeStyle = '#0f0';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, w, h);
+  
+  const cx = x + w/2, cy = y + h/2;
+  ctx.fillStyle = '#0f0';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 5, 0, 2*Math.PI);
+  ctx.fill();
+  
+  ctx.strokeStyle = '#f00';
+  ctx.lineWidth = 2;
+  const fcx = c.width/2, fcy = c.height/2;
+  ctx.beginPath();
+  ctx.moveTo(fcx-20, fcy);
+  ctx.lineTo(fcx+20, fcy);
+  ctx.moveTo(fcx, fcy-20);
+  ctx.lineTo(fcx, fcy+20);
+  ctx.stroke();
+  
+  ctx.strokeStyle = 'rgba(0,255,255,0.5)';
+  ctx.setLineDash([5,5]);
+  ctx.beginPath();
+  ctx.moveTo(fcx, fcy);
+  ctx.lineTo(cx, cy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+async function sendCmd(drive, steer) {
+  if(!isConnected) {
+    if(drive !== 0 || steer !== 0) {
+      updateStatus('⚠️ Not connected to ESP32', false);
+    }
+    return;
+  }
+  
+  document.getElementById('drive').textContent = drive;
+  document.getElementById('steer').textContent = steer;
+  
+  try {
+    const resp = await fetch(`http://${ESP_IP}/control?drive=${drive}&steer=${steer}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(1000)
+    });
+    
+    if(!resp.ok) throw new Error('Command failed');
+  } catch(e) {
+    console.error('Send error:', e);
+    if(isConnected) {
+      log('⚠️ Command send failed');
+    }
+  }
+}
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode').forEach(el => el.classList.remove('active'));
+  event.target.classList.add('active');
+  log('Mode: ' + m);
+}
+
+async function emergencyStop() {
+  log('🛑 EMERGENCY STOP');
+  sendCmd(0, 0);
+  if(isConnected) {
+    try {
+      await fetch(`http://${ESP_IP}/emergency`);
+    } catch(e) {
+      console.error('Stop error:', e);
+    }
+  }
+}
+
+function log(msg) {
+  const d = document.getElementById('log');
+  const t = new Date().toLocaleTimeString();
+  d.innerHTML = `<div>[${t}] ${msg}</div>` + d.innerHTML;
+  if(d.children.length > 50) d.removeChild(d.lastChild);
+}
+
+function updateStatus(msg, ok) {
+  const s = document.getElementById('status');
+  s.textContent = msg;
+  s.className = ok ? 'ok' : '';
+}
+
+init();
+</script>
+</body>
+</html>
